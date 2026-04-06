@@ -104,13 +104,27 @@ class DiceSimulator:
     def simulate_roll(self, body_id, lin_vel, ang_vel, local_normals, max_steps=10000):
         p.resetBaseVelocity(body_id, lin_vel, ang_vel)
         
+        def is_at_rest(body_id):
+            v, o = p.getBaseVelocity(body_id)
+            return np.linalg.norm(v) < 5e-2 and np.linalg.norm(o) < 5e-2
+
         for step in range(max_steps):
             p.stepSimulation()
             if self.gui:
                 time.sleep(1./240.)  # Run in real-time if GUI is enabled
             # Check if at rest
-            v, o = p.getBaseVelocity(body_id)
-            if np.linalg.norm(v) < 5e-3 and np.linalg.norm(o) < 5e-3:
+            if is_at_rest(body_id):
+                # extra steps to make sure it is at rest
+                if self.gui:
+                    p.changeVisualShape(body_id, -1, rgbaColor=[0.5, 1.0, 0.5, 1.0])
+                for i in range(10):
+                    p.stepSimulation()
+                    if self.gui:
+                        time.sleep(1./240.)  # Run in real-time if GUI is enabled
+                if not is_at_rest(body_id):
+                    if self.gui:
+                        p.changeVisualShape(body_id, -1, rgbaColor=[1.0, 1.0, 1.0, 1.0])
+                    continue
                 pos, orn = p.getBasePositionAndOrientation(body_id)
                 rot_mat = np.array(p.getMatrixFromQuaternion(orn)).reshape(3, 3)
                 is_flat = False
@@ -121,11 +135,16 @@ class DiceSimulator:
                         break
                 
                 if is_flat:
+                    # TURN GREEN and wait 100 steps
+                    if self.gui:
+                        p.changeVisualShape(body_id, -1, rgbaColor=[0.2, 1.0, 0.2, 1.0])
+                        for _ in range(100):
+                            p.stepSimulation()
+                            time.sleep(1./240.)
                     break
                 else:
-                    pass
                     # Give it a tiny nudge if perfectly balanced on an edge
-                    #p.applyExternalTorque(body_id, -1, np.random.uniform(-0.01, 0.01, 3), p.WORLD_FRAME)
+                    p.applyExternalTorque(body_id, -1, np.random.uniform(-0.01, 0.01, 3), p.WORLD_FRAME)
                     
             if step == max_steps - 1:
                 print(f"Warning: Dice did not come to rest after {max_steps} steps.")
