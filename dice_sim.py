@@ -15,7 +15,7 @@ def generate_dice_texture(num_faces, cols, rows, filename):
     draw = ImageDraw.Draw(img)
     
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 150)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 100)
     except:
         try:
             font = ImageFont.load_default(size=100)
@@ -28,8 +28,9 @@ def generate_dice_texture(num_faces, cols, rows, filename):
         x = c * cell_size
         y = r * cell_size
         
+        # Centered the text
         text = str(i + 1)
-        # Compatibility check for Pillow version
+             
         if hasattr(draw, 'textbbox'):
             bbox = draw.textbbox((0, 0), text, font=font)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
@@ -56,16 +57,14 @@ class DiceSimulator:
         p.changeDynamics(self.plane_id, -1, restitution=0.6, lateralFriction=0.8)
 
     def create_dice(self, dice_type, pos=[0, 0, 1], orn=[0, 0, 0, 1]):
-        obj_str, (cols, rows) = geometry.get_dice_obj_string(dice_type)
+        obj_str, (cols, rows), num_logical = geometry.get_dice_obj_string(dice_type)
         obj_path = f"temp_{dice_type}.obj"
         with open(obj_path, "w") as f:
             f.write(obj_str)
         
         # Generate texture
-        v, f_geom = geometry.get_dice_geometry(dice_type)
-        num_faces = len(f_geom)
         tex_path = f"temp_{dice_type}.png"
-        generate_dice_texture(num_faces, cols, rows, tex_path)
+        generate_dice_texture(num_logical, cols, rows, tex_path)
         
         # Create collision shape from OBJ
         col_id = p.createCollisionShape(p.GEOM_MESH, fileName=obj_path, meshScale=[0.1, 0.1, 0.1])
@@ -200,6 +199,7 @@ def run_simulation(dice_type='d6', num_rolls=10, gui=False, verbose=False, mp4=N
         face_idx, dot = sim.get_result(body_id, v, f, dice_type)
         # Default mapping fallback if we haven't mapped numbers yet
         mapped_val = face_idx + 1
+            
         if verbose: print(f"    Result obtained: face_idx={face_idx} (Val: {mapped_val}), dot={dot:.4f}... cleaning up.", flush=True)
         results.append((mapped_val, dot))
         

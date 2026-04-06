@@ -50,10 +50,10 @@ def to_obj(vertices, faces, face_uvs=None):
                 lines.append(f"f {' '.join(str(i+1) for i in f)}")
     return "\n".join(lines)
 
-def generate_uvs(faces):
+def generate_uvs(vertices, faces, dice_type=None):
     """
-    Generates a simple grid of UV coordinates for the faces.
-    Each face gets its own cell in a grid.
+    Generates high-quality, aspect-ratio-preserving UV coordinates for every face.
+    Projects each face onto its own 2D plane and fits it into a texture cell.
     """
     num_faces = len(faces)
     cols = int(np.ceil(np.sqrt(num_faces)))
@@ -61,24 +61,74 @@ def generate_uvs(faces):
     
     face_uvs = []
     for i in range(num_faces):
+        # 1. Get face vertices
+        f = faces[i]
+        fv = np.array([vertices[idx] for idx in f])
+        
+        # 2. Define local coordinate system for the face
+        v0 = fv[0]
+        v1 = fv[1]
+        v2 = fv[2]
+        normal = np.cross(v1 - v0, v2 - v0)
+        norm_len = np.linalg.norm(normal)
+        if norm_len < 1e-9:
+            # Degenerate face fallback
+            face_uvs.append([[0, 0]] * len(f))
+            continue
+        normal /= norm_len
+        
+        # e1 and e2 axes for the 2D plane
+        e1 = v1 - v0
+        e1 /= np.linalg.norm(e1)
+        e2 = np.cross(normal, e1)
+        e2 /= np.linalg.norm(e2)
+        
+        # 3. Project to 2D
+        pts2d = []
+        for v in fv:
+            vec = v - v0
+            pts2d.append([np.dot(vec, e1), np.dot(vec, e2)])
+        pts2d = np.array(pts2d)
+        
+        # 4. Find bounding box in 2D
+        p_min = np.min(pts2d, axis=0)
+        p_max = np.max(pts2d, axis=0)
+        p_rng = p_max - p_min
+        p_rng[p_rng < 1e-9] = 1e-9 # avoid div zero
+        
+        # 5. Determine aspect ratio and scaling to fit in [0, 1] square
+        # We want to fit the face into a cell while keeping it proportional.
+        # We'll use a larger margin (0.95) to give the face more territory
+        # which makes the centered text look smaller/better-fitted.
+        margin = 0.95
+        aspect = p_rng[0] / p_rng[1]
+        
+        if aspect > 1.0:
+            scale = margin / p_rng[0]
+            off_x = (1.0 - margin) / 2
+            off_y = (1.0 - p_rng[1] * scale) / 2
+        else:
+            scale = margin / p_rng[1]
+            off_y = (1.0 - margin) / 2
+            off_x = (1.0 - p_rng[0] * scale) / 2
+            
+        # 6. Map to cell [u_min..u_max, v_min..v_max]
         r = i // cols
         c = i % cols
         u_min, u_max = c / cols, (c + 1) / cols
         v_min, v_max = 1.0 - (r + 1) / rows, 1.0 - r / rows
         
-        m = len(faces[i])
         uvs = []
-        if m == 3:
-            uvs = [[u_min, v_min], [u_max, v_min], [(u_min+u_max)/2, v_max]]
-        elif m == 4:
-            uvs = [[u_min, v_min], [u_max, v_min], [u_max, v_max], [u_min, v_max]]
-        else:
-            for j in range(m):
-                angle = 2 * np.pi * j / m - np.pi / 2
-                u = (u_min + u_max) / 2 + 0.45 * (u_max - u_min) * np.cos(angle)
-                v = (v_min + v_max) / 2 + 0.45 * (v_max - v_min) * np.sin(angle)
-                uvs.append([u, v])
+        for p in pts2d:
+            # Local cell coords [0..1]
+            local_u = off_x + (p[0] - p_min[0]) * scale
+            local_v = off_y + (p[1] - p_min[1]) * scale
+            # Global texture coords
+            global_u = u_min + local_u * (1.0 / cols)
+            global_v = v_min + local_v * (1.0 / rows)
+            uvs.append([global_u, global_v])
         face_uvs.append(uvs)
+        
     return face_uvs, cols, rows
 
 def get_d4():
@@ -108,46 +158,54 @@ def get_d8():
     return v, f
 
 def get_d10():
-    h, r = 1.2, 1.0
+    # To make the kite faces perfectly planar, the ratio of H to Z must be
+    # (1 + cos(36)) / (1 - cos(36)) approx 9.472
+    h = 1.4
+    z = h / 9.4721359
+    r = 1.0
     v = [[0, 0, h], [0, 0, -h]]
     for i in range(5):
         a = 2 * np.pi * i / 5
-        v.append([r * np.cos(a), r * np.sin(a), 0.25 * h])
+        v.append([r * np.cos(a), r * np.sin(a), z])
     for i in range(5):
         a = 2 * np.pi * (i + 0.5) / 5
-        v.append([r * np.cos(a), r * np.sin(a), -0.25 * h])
+        v.append([r * np.cos(a), r * np.sin(a), -z])
     v = np.array(v)
     f = []
     for i in range(5):
-        f.append([0, i+2, (i%5)+7, ((i-1)%5)+2])
-        f.append([1, i+7, ((i+1)%5)+2, (i%5)+7])
+        # Upper faces (connected to vertex 0) - kite quad
+        u_idx, u_next = i+2, ((i+1)%5)+2
+        l_idx = i+7
+        f.append([0, u_idx, l_idx, u_next])
+        
+        # Lower faces (connected to vertex 1) - kite quad
+        l_idx, l_prev = i+7, ((i-1)%5)+7
+        u_curr = i+2
+        f.append([1, l_idx, u_curr, l_prev])
     return v, f
 
 def get_d12():
     phi = (1 + np.sqrt(5)) / 2
+    inv_phi = 1 / phi
+    
     # 20 vertices
-    v = []
-    for x in [-1, 1]:
-        for y in [-1, 1]:
-            for z in [-1, 1]: v.append([x, y, z])
-    for x in [0]:
-        for y in [-phi, phi]:
-            for z in [-1/phi, 1/phi]: v.append([x, y, z])
-    for x in [-1/phi, 1/phi]:
-        for y in [0]:
-            for z in [-phi, phi]: v.append([x, y, z])
-    for x in [-phi, phi]:
-        for y in [-1/phi, 1/phi]:
-            for z in [0]: v.append([x, y, z])
-    v = np.array(v)
-    # Faces for D12
-    f = [
-        [0, 2, 14, 4, 12], [0, 12, 5, 15, 1], [0, 1, 9, 11, 2],
-        [3, 1, 15, 8, 17], [3, 17, 7, 19, 11], [3, 11, 9, 10, 1], # indexing is still a bit risky
+    v = [
+        [-1, -1, -1], [-1, -1, 1], [-1, 1, -1], [-1, 1, 1],
+        [1, -1, -1], [1, -1, 1], [1, 1, -1], [1, 1, 1],
+        [0, -inv_phi, -phi], [0, -inv_phi, phi], [0, inv_phi, -phi], [0, inv_phi, phi],
+        [-inv_phi, -phi, 0], [-inv_phi, phi, 0], [inv_phi, -phi, 0], [inv_phi, phi, 0],
+        [-phi, 0, -inv_phi], [phi, 0, -inv_phi], [-phi, 0, inv_phi], [phi, 0, inv_phi]
     ]
-    # Actually, I'll use a simpler trick for D12 faces: convex hull can be found by coplanarity.
-    # But I'll just use a known good set.
-    return v, None 
+    v = np.array(v)
+    
+    # Faces (12 pentagons)
+    f = [
+        [8, 10, 2, 16, 0], [8, 4, 14, 12, 0], [8, 10, 6, 17, 4],
+        [9, 11, 3, 18, 1], [9, 5, 14, 12, 1], [9, 11, 7, 19, 5],
+        [10, 2, 13, 15, 6], [11, 3, 13, 15, 7], [12, 0, 16, 18, 1],
+        [13, 2, 16, 18, 3], [14, 4, 17, 19, 5], [15, 6, 17, 19, 7]
+    ]
+    return v, f
 
 def get_d20():
     phi = (1 + np.sqrt(5)) / 2
@@ -198,6 +256,6 @@ def get_dice_geometry(name):
 def get_dice_obj_string(name):
     v, f = get_dice_geometry(name)
     if f is None:
-        return to_obj(v, []), (1, 1)
-    uvs, cols, rows = generate_uvs(f)
-    return to_obj(v, f, uvs), (cols, rows)
+        return to_obj(v, []), (1, 1), 0
+    uvs, cols, rows = generate_uvs(v, f, name)
+    return to_obj(v, f, uvs), (cols, rows), len(f)
