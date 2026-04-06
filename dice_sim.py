@@ -143,8 +143,9 @@ class DiceSimulator:
                             time.sleep(1./240.)
                     break
                 else:
+                    pass
                     # Give it a tiny nudge if perfectly balanced on an edge
-                    p.applyExternalTorque(body_id, -1, np.random.uniform(-0.01, 0.01, 3), p.WORLD_FRAME)
+                    #p.applyExternalTorque(body_id, -1, np.random.uniform(-0.01, 0.01, 3), p.WORLD_FRAME)
                     
             if step == max_steps - 1:
                 print(f"Warning: Dice did not come to rest after {max_steps} steps.")
