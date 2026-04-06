@@ -152,6 +152,7 @@ class DiceSimulator:
         
         return p.getBasePositionAndOrientation(body_id)
 
+    # todo: doesn't work for solids without opposite face pairs
     def get_result(self, body_id, vertices, faces, dice_type):
         """
         Determine which face is landed. 
