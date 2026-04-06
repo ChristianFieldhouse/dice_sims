@@ -27,14 +27,59 @@ def fix_winding_order(vertices, faces):
             fixed_faces.append(f)
     return fixed_faces
 
-def to_obj(vertices, faces):
+def to_obj(vertices, faces, face_uvs=None):
     lines = []
     for v in vertices:
         lines.append(f"v {v[0]} {v[1]} {v[2]}")
-    for f in faces:
-        if isinstance(f, (list, np.ndarray)):
-            lines.append(f"f {' '.join(str(i+1) for i in f)}")
+    
+    if face_uvs:
+        for uvs in face_uvs:
+            for u, v_coord in uvs:
+                lines.append(f"vt {u} {v_coord}")
+        
+        vt_idx = 1
+        for f, uvs in zip(faces, face_uvs):
+            f_parts = []
+            for v_idx in f:
+                f_parts.append(f"{v_idx+1}/{vt_idx}")
+                vt_idx += 1
+            lines.append(f"f {' '.join(f_parts)}")
+    else:
+        for f in faces:
+            if isinstance(f, (list, np.ndarray)):
+                lines.append(f"f {' '.join(str(i+1) for i in f)}")
     return "\n".join(lines)
+
+def generate_uvs(faces):
+    """
+    Generates a simple grid of UV coordinates for the faces.
+    Each face gets its own cell in a grid.
+    """
+    num_faces = len(faces)
+    cols = int(np.ceil(np.sqrt(num_faces)))
+    rows = int(np.ceil(num_faces / cols))
+    
+    face_uvs = []
+    for i in range(num_faces):
+        r = i // cols
+        c = i % cols
+        u_min, u_max = c / cols, (c + 1) / cols
+        v_min, v_max = 1.0 - (r + 1) / rows, 1.0 - r / rows
+        
+        m = len(faces[i])
+        uvs = []
+        if m == 3:
+            uvs = [[u_min, v_min], [u_max, v_min], [(u_min+u_max)/2, v_max]]
+        elif m == 4:
+            uvs = [[u_min, v_min], [u_max, v_min], [u_max, v_max], [u_min, v_max]]
+        else:
+            for j in range(m):
+                angle = 2 * np.pi * j / m - np.pi / 2
+                u = (u_min + u_max) / 2 + 0.45 * (u_max - u_min) * np.cos(angle)
+                v = (v_min + v_max) / 2 + 0.45 * (v_max - v_min) * np.sin(angle)
+                uvs.append([u, v])
+        face_uvs.append(uvs)
+    return face_uvs, cols, rows
 
 def get_d4():
     v = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], dtype=float)
@@ -152,4 +197,7 @@ def get_dice_geometry(name):
 
 def get_dice_obj_string(name):
     v, f = get_dice_geometry(name)
-    return to_obj(v, f)
+    if f is None:
+        return to_obj(v, []), (1, 1)
+    uvs, cols, rows = generate_uvs(f)
+    return to_obj(v, f, uvs), (cols, rows)

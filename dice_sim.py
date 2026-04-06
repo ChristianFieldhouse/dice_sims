@@ -7,6 +7,37 @@ import argparse
 import geometry
 import os
 from tqdm import tqdm
+from PIL import Image, ImageDraw, ImageFont
+
+def generate_dice_texture(num_faces, cols, rows, filename):
+    cell_size = 256
+    img = Image.new('RGB', (cols * cell_size, rows * cell_size), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 150)
+    except:
+        try:
+            font = ImageFont.load_default(size=100)
+        except:
+            font = ImageFont.load_default()
+        
+    for i in range(num_faces):
+        r = i // cols
+        c = i % cols
+        x = c * cell_size
+        y = r * cell_size
+        
+        text = str(i + 1)
+        # Compatibility check for Pillow version
+        if hasattr(draw, 'textbbox'):
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        else:
+            tw, th = draw.textsize(text, font=font)
+            
+        draw.text((x + (cell_size - tw)/2, y + (cell_size - th)/2), text, fill=(0, 0, 0), font=font)
+    img.save(filename)
 
 class DiceSimulator:
     def __init__(self, gui=False, mp4=None):
@@ -25,10 +56,16 @@ class DiceSimulator:
         p.changeDynamics(self.plane_id, -1, restitution=0.6, lateralFriction=0.8)
 
     def create_dice(self, dice_type, pos=[0, 0, 1], orn=[0, 0, 0, 1]):
-        obj_str = geometry.get_dice_obj_string(dice_type)
+        obj_str, (cols, rows) = geometry.get_dice_obj_string(dice_type)
         obj_path = f"temp_{dice_type}.obj"
         with open(obj_path, "w") as f:
             f.write(obj_str)
+        
+        # Generate texture
+        v, f_geom = geometry.get_dice_geometry(dice_type)
+        num_faces = len(f_geom)
+        tex_path = f"temp_{dice_type}.png"
+        generate_dice_texture(num_faces, cols, rows, tex_path)
         
         # Create collision shape from OBJ
         col_id = p.createCollisionShape(p.GEOM_MESH, fileName=obj_path, meshScale=[0.1, 0.1, 0.1])
@@ -43,7 +80,11 @@ class DiceSimulator:
         )
         p.changeDynamics(body_id, -1, restitution=0.6, lateralFriction=0.8, rollingFriction=0.001, spinningFriction=0.001)
         
-        return body_id, obj_path
+        # Load and apply texture
+        tex_id = p.loadTexture(tex_path)
+        p.changeVisualShape(body_id, -1, textureUniqueId=tex_id)
+        
+        return body_id, obj_path, tex_path
 
     def simulate_roll(self, body_id, lin_vel, ang_vel, local_normals, max_steps=10000):
         p.resetBaseVelocity(body_id, lin_vel, ang_vel)
@@ -152,7 +193,7 @@ def run_simulation(dice_type='d6', num_rolls=10, gui=False, verbose=False, mp4=N
             local_normals.append(n)
         
         if verbose: print(f"    Creating dice for roll {i+1}...", flush=True)
-        body_id, obj_path = sim.create_dice(dice_type, pos=pos, orn=orn)
+        body_id, obj_path, tex_path = sim.create_dice(dice_type, pos=pos, orn=orn)
         if verbose: print(f"    Simulating roll {i+1}...", flush=True)
         sim.simulate_roll(body_id, lin_vel, ang_vel, local_normals, max_steps=100000)
         if verbose: print(f"    Getting result for roll {i+1}...", flush=True)
@@ -172,6 +213,8 @@ def run_simulation(dice_type='d6', num_rolls=10, gui=False, verbose=False, mp4=N
         p.removeBody(body_id)
         if os.path.exists(obj_path):
             os.remove(obj_path)
+        if os.path.exists(tex_path):
+            os.remove(tex_path)
             
     sim.close()
     return results
