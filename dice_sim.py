@@ -45,7 +45,7 @@ class DiceSimulator:
         
         return body_id, obj_path
 
-    def simulate_roll(self, body_id, lin_vel, ang_vel, max_steps=5000):
+    def simulate_roll(self, body_id, lin_vel, ang_vel, local_normals, max_steps=10000):
         p.resetBaseVelocity(body_id, lin_vel, ang_vel)
         
         for step in range(max_steps):
@@ -54,8 +54,23 @@ class DiceSimulator:
                 time.sleep(1./240.)  # Run in real-time if GUI is enabled
             # Check if at rest
             v, o = p.getBaseVelocity(body_id)
-            if np.linalg.norm(v) < 5e-2 and np.linalg.norm(o) < 5e-2:
-                break
+            if np.linalg.norm(v) < 5e-3 and np.linalg.norm(o) < 5e-3:
+                pos, orn = p.getBasePositionAndOrientation(body_id)
+                rot_mat = np.array(p.getMatrixFromQuaternion(orn)).reshape(3, 3)
+                is_flat = False
+                for ln in local_normals:
+                    wn = np.dot(rot_mat, ln)
+                    if wn[2] < -0.985: # Almost pointing straight down
+                        is_flat = True
+                        break
+                
+                if is_flat:
+                    break
+                else:
+                    pass
+                    # Give it a tiny nudge if perfectly balanced on an edge
+                    #p.applyExternalTorque(body_id, -1, np.random.uniform(-0.01, 0.01, 3), p.WORLD_FRAME)
+                    
             if step == max_steps - 1:
                 print(f"Warning: Dice did not come to rest after {max_steps} steps.")
         
@@ -106,31 +121,52 @@ class DiceSimulator:
     def close(self):
         p.disconnect()
 
-def run_simulation(dice_type='d6', num_rolls=10, gui=False, verbose=False, mp4=None, extra_energy=1.0):
+def run_simulation(dice_type='d6', num_rolls=10, gui=False, verbose=False, mp4=None, extra_energy=1.0, 
+                   lin_vel_scale=1.0, up_vel_scale=1.0, ang_vel_scale=1.0):
     sim = DiceSimulator(gui=gui, mp4=mp4)
     results = []
+    square_count = 0
+    pbar = tqdm(range(num_rolls), disable=verbose, desc=f"Rolling {dice_type.upper()}")
     
-    for i in tqdm(range(num_rolls), disable=verbose, desc=f"Rolling {dice_type.upper()}"):
+    for i in pbar:
         if verbose:
             print(f"  Starting roll {i+1}...", flush=True)
         # Random initial conditions
         pos = [0, 0, 0.2]
         orn = p.getQuaternionFromEuler(np.random.uniform(0, 2*np.pi, 3))
-        lin_vel = np.random.uniform(-1, 1, 3) * 2 * extra_energy
-        lin_vel[2] = np.random.uniform(2, 5) * extra_energy # upward toss
-        ang_vel = np.random.uniform(-10, 10, 3) * extra_energy
+        lin_vel = np.random.uniform(-1, 1, 3) * 2 * extra_energy * lin_vel_scale
+        lin_vel[2] = np.random.uniform(3, 6) * extra_energy * up_vel_scale # upward toss
+        ang_vel = np.random.uniform(-10, 10, 3) * extra_energy * ang_vel_scale
         
         v, f = geometry.get_dice_geometry(dice_type) # get the geometry for result checking
+        
+        local_normals = []
+        for face in f:
+            v0 = np.array(v[face[0]])
+            v1 = np.array(v[face[1]])
+            v2 = np.array(v[face[2]])
+            n = np.cross(v1 - v0, v2 - v0)
+            norm = np.linalg.norm(n)
+            if norm > 1e-9:
+                n = n / norm
+            local_normals.append(n)
+        
         if verbose: print(f"    Creating dice for roll {i+1}...", flush=True)
         body_id, obj_path = sim.create_dice(dice_type, pos=pos, orn=orn)
         if verbose: print(f"    Simulating roll {i+1}...", flush=True)
-        sim.simulate_roll(body_id, lin_vel, ang_vel, max_steps=10000)
+        sim.simulate_roll(body_id, lin_vel, ang_vel, local_normals, max_steps=100000)
         if verbose: print(f"    Getting result for roll {i+1}...", flush=True)
         face_idx, dot = sim.get_result(body_id, v, f, dice_type)
         # Default mapping fallback if we haven't mapped numbers yet
         mapped_val = face_idx + 1
         if verbose: print(f"    Result obtained: face_idx={face_idx} (Val: {mapped_val}), dot={dot:.4f}... cleaning up.", flush=True)
         results.append((mapped_val, dot))
+        
+        if dice_type.lower() == 'cuboctahedron':
+            if mapped_val > 8:
+                square_count += 1
+            if not verbose:
+                pbar.set_postfix(sq_pct=f"{square_count/(i+1)*100:.1f}%")
         
         # Cleanup body for next roll
         p.removeBody(body_id)
@@ -148,6 +184,9 @@ if __name__ == "__main__":
     parser.add_argument('--mp4', type=str, default=None, help="Save GUI run to MP4 file (enables GUI)")
     parser.add_argument('--verbose', '-v', action='store_true', help="Enable verbose printouts per roll")
     parser.add_argument('--extra-energy', type=float, default=1.0, help="Velocity multiplier for throws")
+    parser.add_argument('--lin-vel-scale', type=float, default=1.0, help="Linear velocity scale factor")
+    parser.add_argument('--up-vel-scale', type=float, default=1.0, help="Upward velocity scale factor")
+    parser.add_argument('--ang-vel-scale', type=float, default=1.0, help="Angular velocity scale factor")
     args = parser.parse_args()
 
     if args.mp4:
@@ -155,7 +194,10 @@ if __name__ == "__main__":
 
     print(f"\n--- Simulation Results (Extra Energy: {args.extra_energy}) ---")
     print(f"Running {args.rolls} rolls of {args.dice.upper()}...", flush=True)
-    res = run_simulation(args.dice, num_rolls=args.rolls, gui=args.gui, verbose=args.verbose, mp4=args.mp4, extra_energy=args.extra_energy)
+    res = run_simulation(args.dice, num_rolls=args.rolls, gui=args.gui, verbose=args.verbose, 
+                         mp4=args.mp4, extra_energy=args.extra_energy, 
+                         lin_vel_scale=args.lin_vel_scale, up_vel_scale=args.up_vel_scale, 
+                         ang_vel_scale=args.ang_vel_scale)
     
     from collections import Counter
     counts = Counter(val for val, d in res)
