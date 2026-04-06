@@ -1,4 +1,6 @@
 import numpy as np
+import json
+import os
 
 def fix_winding_order(vertices, faces):
     """
@@ -239,15 +241,131 @@ def get_cuboctahedron():
     ]
     return v, f
 
+def compute_convex_hull(vertices):
+    """
+    Computes faces of a convex hull from a point cloud.
+    Returns a list of faces, where each face is a list of vertex indices.
+    """
+    n = len(vertices)
+    if n < 4: return []
+    
+    triangles = []
+    center = np.mean(vertices, axis=0)
+    
+    # 1. Find all triplets that form a hull face
+    for i in range(n):
+        for j in range(i + 1, n):
+            for k in range(j + 1, n):
+                v0, v1, v2 = vertices[i], vertices[j], vertices[k]
+                norm = np.cross(v1 - v0, v2 - v0)
+                l = np.linalg.norm(norm)
+                if l < 1e-9: continue
+                norm /= l
+                
+                # Ensure normal points away from center
+                if np.dot(norm, v0 - center) < 0:
+                    norm = -norm
+                    
+                # Check if all other points are "behind" the plane
+                dots = np.dot(vertices - v0, norm)
+                if np.all(dots < 1e-5):
+                    # Potential face
+                    triangles.append({'indices': [i, j, k], 'normal': norm})
+    
+    # 2. Merge coplanar triangles into larger polygons
+    # For Archimedean solids, neighbors are coplanar if they share an edge and have same normal
+    faces = []
+    used_triangles = [False] * len(triangles)
+    
+    for i in range(len(triangles)):
+        if used_triangles[i]: continue
+        
+        current_face_indices = set(triangles[i]['indices'])
+        current_normal = triangles[i]['normal']
+        used_triangles[i] = True
+        
+        # Grow the face by adding coplanar triangles that share at least 2 vertices
+        changed = True
+        while changed:
+            changed = False
+            for j in range(len(triangles)):
+                if used_triangles[j]: continue
+                if np.dot(current_normal, triangles[j]['normal']) > 0.9999:
+                    shared = current_face_indices.intersection(triangles[j]['indices'])
+                    if len(shared) >= 2:
+                        current_face_indices.update(triangles[j]['indices'])
+                        used_triangles[j] = True
+                        changed = True
+        
+        # 3. Order vertices of the merged polygon
+        # This is a bit tricky. We have a set of vertices on a plane.
+        # We'll project to 2D and sort by angle from centroid.
+        face_list = list(current_face_indices)
+        if len(face_list) < 3: continue
+        
+        face_v = vertices[face_list]
+        face_center = np.mean(face_v, axis=0)
+        
+        # Local 2D space
+        v0 = vertices[face_list[0]]
+        e1 = vertices[face_list[1]] - v0
+        e1 /= np.linalg.norm(e1)
+        e2 = np.cross(current_normal, e1)
+        
+        angles = []
+        for idx in face_list:
+            vec = vertices[idx] - face_center
+            angles.append(np.arctan2(np.dot(vec, e2), np.dot(vec, e1)))
+            
+        sorted_indices = [face_list[idx] for idx in np.argsort(angles)]
+        faces.append(sorted_indices)
+        
+    return faces
+
+_archimedean_data = None
+_hull_cache = {}
+
+def load_archimedean():
+    global _archimedean_data
+    if _archimedean_data is not None: return _archimedean_data
+    
+    path = os.path.join(os.path.dirname(__file__), "archimedean.json")
+    if not os.path.exists(path):
+        _archimedean_data = {}
+        return {}
+        
+    with open(path, "r") as f:
+        _archimedean_data = json.load(f)
+    return _archimedean_data
+
 def get_dice_geometry(name):
-    if name == 'd4': v, f = get_d4()
-    elif name == 'd6': v, f = get_d6()
-    elif name == 'd8': v, f = get_d8()
-    elif name == 'd10': v, f = get_d10()
-    elif name == 'd12': v, f = get_d12()
-    elif name == 'd20': v, f = get_d20()
-    elif name == 'cuboctahedron': v, f = get_cuboctahedron()
-    else: raise ValueError(f"Unknown dice: {name}")
+    lower_name = name.lower()
+    if lower_name == 'd4': v, f = get_d4()
+    elif lower_name == 'd6': v, f = get_d6()
+    elif lower_name == 'd8': v, f = get_d8()
+    elif lower_name == 'd10': v, f = get_d10()
+    elif lower_name == 'd12': v, f = get_d12()
+    elif lower_name == 'd20': v, f = get_d20()
+    elif lower_name == 'cuboctahedron': v, f = get_cuboctahedron()
+    else:
+        # Check hull cache first
+        if lower_name in _hull_cache:
+            return _hull_cache[lower_name]
+            
+        data = load_archimedean()
+        # Search by name (case-insensitive)
+        match = None
+        for key in data:
+            if key.lower() == lower_name:
+                match = data[key]
+                break
+        
+        if match:
+            v = np.array(match['vertices'])
+            f = compute_convex_hull(v)
+            _hull_cache[lower_name] = (v, f)
+        else:
+            raise ValueError(f"Unknown dice: {name}")
     
     if f is not None:
         f = fix_winding_order(v, f)

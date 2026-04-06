@@ -55,20 +55,39 @@ class DiceSimulator:
         # Load ground plane
         self.plane_id = p.loadURDF("plane.urdf")
         p.changeDynamics(self.plane_id, -1, restitution=0.6, lateralFriction=0.8)
+        
+        # Resource cache per dice type
+        self.resource_cache = {}
 
     def create_dice(self, dice_type, pos=[0, 0, 1], orn=[0, 0, 0, 1]):
-        obj_str, (cols, rows), num_logical = geometry.get_dice_obj_string(dice_type)
-        obj_path = f"temp_{dice_type}.obj"
-        with open(obj_path, "w") as f:
-            f.write(obj_str)
-        
-        # Generate texture
-        tex_path = f"temp_{dice_type}.png"
-        generate_dice_texture(num_logical, cols, rows, tex_path)
-        
-        # Create collision shape from OBJ
-        col_id = p.createCollisionShape(p.GEOM_MESH, fileName=obj_path, meshScale=[0.1, 0.1, 0.1])
-        vis_id = p.createVisualShape(p.GEOM_MESH, fileName=obj_path, meshScale=[0.1, 0.1, 0.1], rgbaColor=[1, 1, 1, 1])
+        if dice_type in self.resource_cache:
+            cache = self.resource_cache[dice_type]
+            col_id = cache['col_id']
+            vis_id = cache['vis_id']
+            tex_id = cache['tex_id']
+        else:
+            obj_str, (cols, rows), num_logical = geometry.get_dice_obj_string(dice_type)
+            obj_path = f"temp_{dice_type}.obj"
+            with open(obj_path, "w") as f:
+                f.write(obj_str)
+            
+            # Generate texture
+            tex_path = f"temp_{dice_type}.png"
+            generate_dice_texture(num_logical, cols, rows, tex_path)
+            
+            # Create collision shape from OBJ
+            col_id = p.createCollisionShape(p.GEOM_MESH, fileName=obj_path, meshScale=[0.1, 0.1, 0.1])
+            vis_id = p.createVisualShape(p.GEOM_MESH, fileName=obj_path, meshScale=[0.1, 0.1, 0.1], rgbaColor=[1, 1, 1, 1])
+            
+            # Load and apply texture
+            tex_id = p.loadTexture(tex_path)
+            
+            self.resource_cache[dice_type] = {
+                'col_id': col_id,
+                'vis_id': vis_id,
+                'tex_id': tex_id,
+                'files': [obj_path, tex_path]
+            }
         
         body_id = p.createMultiBody(
             baseMass=0.01,
@@ -78,12 +97,9 @@ class DiceSimulator:
             baseOrientation=orn
         )
         p.changeDynamics(body_id, -1, restitution=0.6, lateralFriction=0.8, rollingFriction=0.001, spinningFriction=0.001)
-        
-        # Load and apply texture
-        tex_id = p.loadTexture(tex_path)
         p.changeVisualShape(body_id, -1, textureUniqueId=tex_id)
         
-        return body_id, obj_path, tex_path
+        return body_id
 
     def simulate_roll(self, body_id, lin_vel, ang_vel, local_normals, max_steps=10000):
         p.resetBaseVelocity(body_id, lin_vel, ang_vel)
@@ -192,7 +208,7 @@ def run_simulation(dice_type='d6', num_rolls=10, gui=False, verbose=False, mp4=N
             local_normals.append(n)
         
         if verbose: print(f"    Creating dice for roll {i+1}...", flush=True)
-        body_id, obj_path, tex_path = sim.create_dice(dice_type, pos=pos, orn=orn)
+        body_id = sim.create_dice(dice_type, pos=pos, orn=orn)
         if verbose: print(f"    Simulating roll {i+1}...", flush=True)
         sim.simulate_roll(body_id, lin_vel, ang_vel, local_normals, max_steps=100000)
         if verbose: print(f"    Getting result for roll {i+1}...", flush=True)
@@ -211,10 +227,13 @@ def run_simulation(dice_type='d6', num_rolls=10, gui=False, verbose=False, mp4=N
         
         # Cleanup body for next roll
         p.removeBody(body_id)
-        if os.path.exists(obj_path):
-            os.remove(obj_path)
-        if os.path.exists(tex_path):
-            os.remove(tex_path)
+            
+    # Final cleanup of resources
+    for cache in sim.resource_cache.values():
+        for f_path in cache['files']:
+            if os.path.exists(f_path):
+                os.remove(f_path)
+    sim.resource_cache = {}
             
     sim.close()
     return results
