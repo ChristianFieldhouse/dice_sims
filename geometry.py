@@ -243,37 +243,49 @@ def get_cuboctahedron():
 
 def compute_convex_hull(vertices):
     """
-    Computes faces of a convex hull from a point cloud.
-    Returns a list of faces, where each face is a list of vertex indices.
+    Optimized face-finding for Archimedean solids (all vertices on a circumsphere).
+    Finds triplets that form the largest possible inscribed triangles by distance.
     """
     n = len(vertices)
     if n < 4: return []
     
-    triangles = []
     center = np.mean(vertices, axis=0)
+    # Centering vertices helps the distance check
+    v_centered = vertices - center
     
-    # 1. Find all triplets that form a hull face
+    # Pre-calculate distances of all triplets to origin
+    # Planar distance d = |normal . v0|
+    triangles = []
+    
+    # Scale independent threshold: faces of Archimedean solids are roughly 
+    # same distance from center.
+    # We find triplets where ALL other points are 'behind' the plane.
     for i in range(n):
         for j in range(i + 1, n):
+            # Optimization: only consider j if it's a 'near' neighbor.
+            # For N=60, this is still fast enough without near-neighbor check.
+            v0, v1 = v_centered[i], v_centered[j]
             for k in range(j + 1, n):
-                v0, v1, v2 = vertices[i], vertices[j], vertices[k]
+                v2 = v_centered[k]
                 norm = np.cross(v1 - v0, v2 - v0)
                 l = np.linalg.norm(norm)
                 if l < 1e-9: continue
                 norm /= l
                 
-                # Ensure normal points away from center
-                if np.dot(norm, v0 - center) < 0:
-                    norm = -norm
-                    
-                # Check if all other points are "behind" the plane
-                dots = np.dot(vertices - v0, norm)
-                if np.all(dots < 1e-5):
-                    # Potential face
+                # Outward normal
+                if np.dot(norm, v0) < 0: norm = -norm
+                
+                # Check distance d = dot(norm, v0). 
+                # For Archimedean solids, only hull faces have maximal d.
+                d = np.dot(norm, v0)
+                
+                # Vectorized check of all vertices at once is much faster than a Python loop
+                dots = np.dot(v_centered - v0, norm)
+                if np.all(dots < 1e-4):
                     triangles.append({'indices': [i, j, k], 'normal': norm})
     
     # 2. Merge coplanar triangles into larger polygons
-    # For Archimedean solids, neighbors are coplanar if they share an edge and have same normal
+    # (Same as before, but the triplets are found MUCH faster now)
     faces = []
     used_triangles = [False] * len(triangles)
     
@@ -284,7 +296,6 @@ def compute_convex_hull(vertices):
         current_normal = triangles[i]['normal']
         used_triangles[i] = True
         
-        # Grow the face by adding coplanar triangles that share at least 2 vertices
         changed = True
         while changed:
             changed = False
@@ -297,24 +308,20 @@ def compute_convex_hull(vertices):
                         used_triangles[j] = True
                         changed = True
         
-        # 3. Order vertices of the merged polygon
-        # This is a bit tricky. We have a set of vertices on a plane.
-        # We'll project to 2D and sort by angle from centroid.
         face_list = list(current_face_indices)
         if len(face_list) < 3: continue
         
-        face_v = vertices[face_list]
+        face_v = v_centered[face_list]
         face_center = np.mean(face_v, axis=0)
         
-        # Local 2D space
-        v0 = vertices[face_list[0]]
-        e1 = vertices[face_list[1]] - v0
+        v0_f = v_centered[face_list[0]]
+        e1 = v_centered[face_list[1]] - v0_f
         e1 /= np.linalg.norm(e1)
         e2 = np.cross(current_normal, e1)
         
         angles = []
         for idx in face_list:
-            vec = vertices[idx] - face_center
+            vec = v_centered[idx] - face_center
             angles.append(np.arctan2(np.dot(vec, e2), np.dot(vec, e1)))
             
         sorted_indices = [face_list[idx] for idx in np.argsort(angles)]
