@@ -376,6 +376,12 @@ def get_dice_geometry(name):
     
     if f is not None:
         f = fix_winding_order(v, f)
+        
+    # Normalize radius to 1.0
+    max_radius = np.max(np.linalg.norm(v, axis=1))
+    if max_radius > 1e-9:
+        v = v / max_radius
+        
     return v, f
 
 def get_dice_obj_string(name):

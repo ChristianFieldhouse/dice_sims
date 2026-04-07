@@ -106,7 +106,8 @@ class DiceSimulator:
         
         def is_at_rest(body_id):
             v, o = p.getBaseVelocity(body_id)
-            return np.linalg.norm(v) < 5e-2 and np.linalg.norm(o) < 5e-2
+            #print(np.linalg.norm(v), np.linalg.norm(o))
+            return np.linalg.norm(v) < 5e-3 and np.linalg.norm(o) < 5e-3
 
         for step in range(max_steps):
             p.stepSimulation()
@@ -152,27 +153,16 @@ class DiceSimulator:
         
         return p.getBasePositionAndOrientation(body_id)
 
-    # todo: doesn't work for solids without opposite face pairs
     def get_result(self, body_id, vertices, faces, dice_type):
         """
         Determine which face is landed. 
-        For D4, we find the highest vertex. 
-        For others, we find the most vertical face normal.
+        Finds the face whose normal points most downwards (lowest face parallel to ground).
         """
         pos, orn = p.getBasePositionAndOrientation(body_id)
         rot_mat = np.array(p.getMatrixFromQuaternion(orn)).reshape(3, 3)
         
-        max_dot = -1
+        min_dot = 2.0
         best_idx = -1
-        
-        if dice_type == 'd4':
-            for i, v in enumerate(vertices):
-                world_v = np.dot(rot_mat, v)
-                dot = world_v[2]
-                if dot > max_dot:
-                    max_dot = dot
-                    best_idx = i
-            return best_idx, max_dot
         
         # Calculate local normals
         local_normals = []
@@ -189,11 +179,12 @@ class DiceSimulator:
         for i, n in enumerate(local_normals):
             world_n = np.dot(rot_mat, n)
             dot = world_n[2]
-            if dot > max_dot:
-                max_dot = dot
+            if dot < min_dot:
+                min_dot = dot
                 best_idx = i
                 
-        return best_idx, max_dot
+        # Return best_idx and how closely it points down (e.g., 1.0 means perfectly flat)
+        return best_idx, -min_dot
 
     def close(self):
         p.disconnect()
